@@ -242,7 +242,7 @@ def sheet_to_image(options: dict):
 
 def main(cmdline):
     try:
-        options, args = getopt.getopt(cmdline, "hi:o:x:y:l:b:s:m:")
+        options, args = getopt.getopt(cmdline, "hi:o:x:y:l:b:sm:")
     except getopt.GetoptError as err:
         print("PixieSheet.py -h for instructions")
         return
