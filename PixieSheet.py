@@ -27,11 +27,90 @@ import numpy
 import getopt
 import openpyxl
 import math
+from colorsys import rgb_to_hls, hls_to_rgb
+from openpyxl.styles.colors import Color, COLOR_INDEX
 from PIL import Image, ImageColor
 
-
-# TODO: Organize functions into classes
+# TODO: Organize functions into classes and cleanup
 # TODO: Replace xlsxwriter with openpyxl
+# TODO: Move this to a class and seperate python file
+RGBMAX = 0xff  # Corresponds to 255
+HLSMAX = 240  # MS excel's tint function expects that HLS is base 240. see:
+
+
+# https://social.msdn.microsoft.com/Forums/en-US/e9d8c136-6d62-4098-9b1b-dac786149f43/excel-color-tint-algorithm-incorrect?forum=os_binaryfile#d3c2ac95-52e0-476b-86f1-e2a697f24969
+
+
+# Converts rgb values in range (0,1) or a hex string of the form '[#aa]rrggbb' to HLSMAX based HLS (alpha values are
+# ignored)
+def rgb_to_ms_hls(red, green=None, blue=None):
+    if green is None:
+        if isinstance(red, str):
+            if len(red) > 6:
+                red = red[-6:]  # Ignore preceding '#' and alpha values
+            blue = int(red[4:], 16) / RGBMAX
+            green = int(red[2:4], 16) / RGBMAX
+            red = int(red[0:2], 16) / RGBMAX
+        else:
+            red, green, blue = red
+
+    h, l, s = rgb_to_hls(red, green, blue)
+    return int(round(h * HLSMAX)), int(round(l * HLSMAX)), int(round(s * HLSMAX))
+
+
+# Converts HLSMAX based HLS values to rgb values in the range (0,1)
+def ms_hls_to_rgb(hue, lightness=None, saturation=None):
+    if lightness is None:
+        hue, lightness, saturation = hue
+
+    return hls_to_rgb(hue / HLSMAX, lightness / HLSMAX, saturation / HLSMAX)
+
+
+# Converts (0,1) based RGB values to a hex string 'rrggbb'
+def rgb_to_hex(red, green=None, blue=None):
+    if green is None:
+        red, green, blue = red
+    return ('%02x%02x%02x' % (int(round(red * RGBMAX)), int(round(green * RGBMAX)), int(round(blue * RGBMAX)))).upper()
+
+
+# Gets theme colors from the workbook
+def get_theme_colors(wb):
+    # see: https://groups.google.com/forum/#!topic/openpyxl-users/I0k3TfqNLrc
+    from openpyxl.xml.functions import QName, fromstring
+    xlmns = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+    root = fromstring(wb.loaded_theme)
+    theme_el = root.find(QName(xlmns, 'themeElements').text)
+    color_schemes = theme_el.findall(QName(xlmns, 'clrScheme').text)
+    first_color_scheme = color_schemes[0]
+
+    colors = []
+
+    for c in ['lt1', 'dk1', 'lt2', 'dk2', 'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6']:
+        accent = first_color_scheme.find(QName(xlmns, c).text)
+        for i in list(accent):  # walk all child nodes, rather than assuming [0]
+            if 'window' in i.attrib['val']:
+                colors.append(i.attrib['lastClr'])
+            else:
+                colors.append(i.attrib['val'])
+
+    return colors
+
+
+# Tints a HLSMAX based luminance
+def tint_luminance(tint, lum):
+    # See: http://ciintelligence.blogspot.co.uk/2012/02/converting-excel-theme-color-and-tint.html
+    if tint < 0:
+        return int(round(lum * (1.0 + tint)))
+    else:
+        return int(round(lum * (1.0 - tint) + (HLSMAX - HLSMAX * (1.0 - tint))))
+
+
+# Given a workbook, a theme number and a tint return a hex based rgb
+def theme_and_tint_to_rgb(wb, theme, tint):
+    rgb = get_theme_colors(wb)[theme]
+    h, l, s = rgb_to_ms_hls(rgb)
+    return rgb_to_hex(ms_hls_to_rgb(h, tint_luminance(tint, l), s))
+
 
 # Loads the passed image into a PIL image object
 def load_image(path: str) -> Image:
@@ -134,8 +213,9 @@ def generate_pixel_map(image: Image, pixel_size: int) -> numpy.ndarray:
 
     return numpy.asarray(out_array, dtype="uint8")
 
+
 # TODO: Does PIL have a class for this?
-def rgb_to_hex(rgb: tuple):
+def sheet_rgb_to_hex(rgb: tuple):
     return "%02x%02x%02x" % rgb
 
 
@@ -166,7 +246,7 @@ def map_to_sheet(pixel_map: numpy.ndarray,
     for y in range(height):
         for x in range(width):
             rgb = pixel_map[y][x]
-            fmt = book.add_format({"bg_color": "#" + rgb_to_hex((rgb[0], rgb[1], rgb[2]))})
+            fmt = book.add_format({"bg_color": "#" + sheet_rgb_to_hex((rgb[0], rgb[1], rgb[2]))})
             sheet.write(y + corner_offset, x + corner_offset, "", fmt)
 
     book.close()
@@ -213,7 +293,7 @@ def get_sheet_dimensions(sheet) -> dict:
 
 
 # Generates a pixel map of the image found in a spreadsheet
-def sheet_to_map(sheet, dimensions: dict) -> numpy.ndarray:
+def sheet_to_map(workbook, sheet, dimensions: dict) -> numpy.ndarray:
     corner_offset = 1
     impl_offset = 1
     real_offset = corner_offset + impl_offset
@@ -221,7 +301,18 @@ def sheet_to_map(sheet, dimensions: dict) -> numpy.ndarray:
     for y in range(dimensions["y"]):
         row = []
         for x in range(dimensions["x"]):
-            rgb_str = "#" + sheet.cell(real_offset + y, real_offset + x).fill.fgColor.rgb
+            cell = sheet.cell(real_offset + y, real_offset + x)
+            color = cell.fill.fgColor
+            rgb_str = ""
+            if color.type == "rgb":
+                rgb_str = "#" + color.rgb
+            elif color.type == "theme":
+                rgb_str = "#FF" + theme_and_tint_to_rgb(workbook, color.theme, color.tint)
+            elif color.type == "indexed":
+                rgb_str = "#" + COLOR_INDEX[color.index]
+            else:
+                raise RuntimeError("Unsupported cell color type")
+
             argb = ImageColor.getcolor(rgb_str, "RGBA")
             row.append((argb[1], argb[2], argb[3]))
 
@@ -235,7 +326,7 @@ def sheet_to_image(options: dict):
     book = openpyxl.load_workbook(options["input"])
     sheet = book.active
     dimensions = get_sheet_dimensions(sheet)
-    image_map = sheet_to_map(sheet, dimensions)
+    image_map = sheet_to_map(book, sheet, dimensions)
     image = Image.fromarray(image_map)
     image.save(options["output"])
 
