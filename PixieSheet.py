@@ -22,11 +22,14 @@ import array
 import sys
 
 import xlsxwriter
+import xlsxwriter.utility
 import numpy
 import getopt
 import math
 from PIL import Image
 
+
+# TODO: Organize functions into classes
 
 # Loads the passed image into a PIL image object
 def load_image(path: str) -> Image:
@@ -120,18 +123,62 @@ def generate_pixel_map(image: Image, pixel_size: int) -> numpy.ndarray:
     return numpy.asarray(out_array, dtype="uint8")
 
 
-def image_to_sheet(image_path: str):
-    input_image = load_image(image_path)
-    image_info = get_image_info(input_image)
-    cropped_image = trim_image(input_image, image_info)
-    pixel_map = generate_pixel_map(cropped_image, image_info["pixel-size"])
-    pixel_image = Image.fromarray(pixel_map)
-    pixel_image.save("Untitled-3.png")
+def rgb_to_hex(rgb: tuple):
+    return "%02x%02x%02x" % rgb
+
+
+# TODO: Split functionality into different classes
+# Converts a pixel map to a spreadsheet
+def map_to_sheet(pixel_map: numpy.ndarray,
+                 output_path: str,
+                 x_begin: int,
+                 y_begin: int,
+                 column_width: float,
+                 row_height: float):
+    book = xlsxwriter.Workbook(output_path)
+    sheet = book.add_worksheet("Art")
+
+    width = pixel_map.shape[1]
+    height = pixel_map.shape[0]
+    corner_offset = 1
+
+    sheet.set_column(0, width, column_width)
+    sheet.set_default_row(row_height)
+
+    for x in range(width):
+        sheet.write(0, x + corner_offset, x_begin + x)
+
+    for y in range(height):
+        sheet.write(y + corner_offset, 0, y_begin + y)
+
+    for y in range(height):
+        for x in range(width):
+            rgb = pixel_map[y][x]
+            fmt = book.add_format({"bg_color": "#" + rgb_to_hex((rgb[0], rgb[1], rgb[2]))})
+            sheet.write(y + corner_offset, x + corner_offset, "", fmt)
+
+    book.close()
+
+
+# Performs preprocessing on image, then converts it to a spreadsheet
+def image_to_sheet(options: dict):
+    image = load_image(options["input"])
+    image_info = {"begin": (0, 0), "pixel-size": 1}
+    if not options["spm"]:
+        image_info = get_image_info(image)
+        image = trim_image(image, image_info)
+    pixel_map = generate_pixel_map(image, image_info["pixel-size"])
+    map_to_sheet(pixel_map,
+                 options["output"],
+                 options["begin"]["x"],
+                 options["begin"]["y"],
+                 options["dimensions"]["w"],
+                 options["dimensions"]["h"])
 
 
 def main(cmdline):
     try:
-        options, args = getopt.getopt(cmdline, "hi:")
+        options, args = getopt.getopt(cmdline, "hi:o:x:y:l:b:s")
     except getopt.GetoptError as err:
         print("PixieSheet.py -h for instructions")
         return
@@ -140,16 +187,39 @@ def main(cmdline):
         print("PixieSheet.py -h for instructions")
         return
 
-    image_path = ""
+    set_values = {"input": None, "output": None, "begin": {"x": 0, "y": 0}, "dimensions": {"w": 2.57, "h": 15.75}, "spm": False}
     for option, argument in options:
         if option == "-i":
-            image_path = argument
+            set_values["input"] = argument
+        elif option == "-o":
+            set_values["output"] = argument
+        elif option == "-x":
+            set_values["begin"]["x"] = int(argument)
+        elif option == "-y":
+            set_values["begin"]["y"] = int(argument)
+        elif option == "-l":
+            set_values["dimensions"]["w"] = int(argument)
+        elif option == "-b":
+            set_values["dimensions"]["h"] = int(argument)
+        elif option == "-s":
+            set_values["spm"] = True
         else:
-            print("Ain't nothin' ere yet boy")
+            print("PixieSheet - Fast and easy pixel art to spreadsheet\n"
+                  "\n"
+                  "-i (Required) <Image input path> - Specify the image to turn into a spreadsheet.\n"
+                  "-o (Required) <Output name> - Specify the path of the output spreadsheet.\n"
+                  "-x <First pixel X> - Specify the X coordinate of the first pixel to place on r/place\n"
+                  "-y <First pixel Y> - Specify the Y coordinate of the first pixel to place on r/place\n"
+                  "-l <Cell width> - Specify the desired cell width (default is 2.57).\n"
+                  "-b <Cell height> - Specify the desired cell height (default is 15.75).\n"
+                  "-s <Single pixel mode> - Run the script in single pixel mode, this will assume that your image "
+                  "already has 1x1 pixels, this removes the need for a header.\n")
             return
 
-    if image_path != "":
-        image_to_sheet(image_path)
+    if set_values["input"] is None or set_values["output"] is None:
+        print("PixieSheet.py -h for instructions")
+
+    image_to_sheet(set_values)
 
 
 if __name__ == '__main__':
