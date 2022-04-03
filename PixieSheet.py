@@ -25,15 +25,21 @@ import xlsxwriter
 import xlsxwriter.utility
 import numpy
 import getopt
+import openpyxl
 import math
-from PIL import Image
+from PIL import Image, ImageColor
 
 
 # TODO: Organize functions into classes
+# TODO: Replace xlsxwriter with openpyxl
 
 # Loads the passed image into a PIL image object
 def load_image(path: str) -> Image:
-    return Image.open(path)
+    image = Image.open(path)
+    if image.format != "PNG" or image.mode != "RGB":
+        raise RuntimeError("Only non-transparent PNGs are supported")
+
+    return image
 
 
 # Obtains image starting coordinates and size of pixels
@@ -49,10 +55,12 @@ def get_image_info(image: Image) -> dict:
     for y in range(image.height):
         if header_found:
             break
+
         for x in range(image.width):
             current_pixel = image.getpixel((x, y))
             if header_found:
                 break
+
             # Found initial header pixel
             if numpy.array_equal(current_pixel, header_colors[header_check_index]):
                 out_info["begin"] = [x, y]
@@ -61,6 +69,7 @@ def get_image_info(image: Image) -> dict:
                     next_pixel = [-1, -1, -1]
                     if inner_x + 1 < image.width:
                         next_pixel = image.getpixel((inner_x + 1, y))
+
                     # Check if we are still counting the same pixel
                     if numpy.array_equal(current_pixel, header_colors[header_check_index]):
                         size_counter += 1
@@ -85,6 +94,9 @@ def get_image_info(image: Image) -> dict:
                     # Behaviour if pixel is not of the expected header color
                     else:
                         raise RuntimeError("Unexpected pixel color encountered when interpreting header")
+
+    if not header_found:
+        raise RuntimeError("Header was not found in image")
 
     return out_info
 
@@ -122,7 +134,7 @@ def generate_pixel_map(image: Image, pixel_size: int) -> numpy.ndarray:
 
     return numpy.asarray(out_array, dtype="uint8")
 
-
+# TODO: Does PIL have a class for this?
 def rgb_to_hex(rgb: tuple):
     return "%02x%02x%02x" % rgb
 
@@ -176,9 +188,61 @@ def image_to_sheet(options: dict):
                  options["dimensions"]["h"])
 
 
+# Establishes dimension of the image presented in the sheet
+def get_sheet_dimensions(sheet) -> dict:
+    dimensions = {"x": 0, "y": 0}
+    corner_offset = 1
+    impl_offset = 1
+    index = 0
+    while True:
+        if sheet.cell(impl_offset, impl_offset + corner_offset + index).value is None:
+            break
+
+        index += 1
+        dimensions["x"] += 1
+
+    index = 0
+    while True:
+        if sheet.cell(impl_offset + corner_offset + index, impl_offset).value is None:
+            break
+
+        index += 1
+        dimensions["y"] += 1
+
+    return dimensions
+
+
+# Generates a pixel map of the image found in a spreadsheet
+def sheet_to_map(sheet, dimensions: dict) -> numpy.ndarray:
+    corner_offset = 1
+    impl_offset = 1
+    real_offset = corner_offset + impl_offset
+    image_map = []
+    for y in range(dimensions["y"]):
+        row = []
+        for x in range(dimensions["x"]):
+            rgb_str = "#" + sheet.cell(real_offset + y, real_offset + x).fill.fgColor.rgb
+            argb = ImageColor.getcolor(rgb_str, "RGBA")
+            row.append((argb[1], argb[2], argb[3]))
+
+        image_map.append(row)
+
+    return numpy.asarray(image_map, dtype="uint8")
+
+
+# Converts a spreadsheet to a 1x1 pixel image
+def sheet_to_image(options: dict):
+    book = openpyxl.load_workbook(options["input"])
+    sheet = book.active
+    dimensions = get_sheet_dimensions(sheet)
+    image_map = sheet_to_map(sheet, dimensions)
+    image = Image.fromarray(image_map)
+    image.save(options["output"])
+
+
 def main(cmdline):
     try:
-        options, args = getopt.getopt(cmdline, "hi:o:x:y:l:b:s")
+        options, args = getopt.getopt(cmdline, "hi:o:x:y:l:b:s:m:")
     except getopt.GetoptError as err:
         print("PixieSheet.py -h for instructions")
         return
@@ -187,12 +251,15 @@ def main(cmdline):
         print("PixieSheet.py -h for instructions")
         return
 
-    set_values = {"input": None, "output": None, "begin": {"x": 0, "y": 0}, "dimensions": {"w": 2.57, "h": 15.75}, "spm": False}
+    set_values = {"input": None, "output": None, "mode": None, "begin": {"x": 0, "y": 0},
+                  "dimensions": {"w": 2.57, "h": 15.75}, "spm": False}
     for option, argument in options:
         if option == "-i":
             set_values["input"] = argument
         elif option == "-o":
             set_values["output"] = argument
+        elif option == "-m":
+            set_values["mode"] = argument
         elif option == "-x":
             set_values["begin"]["x"] = int(argument)
         elif option == "-y":
@@ -206,7 +273,9 @@ def main(cmdline):
         else:
             print("PixieSheet - Fast and easy pixel art to spreadsheet\n"
                   "\n"
-                  "-i (Required) <Image input path> - Specify the image to turn into a spreadsheet.\n"
+                  "-m (Required) <Mode> - Specify whether you wanna convert image->spreadsheet or spreadsheet->image "
+                  "(values: tosheet, fromsheet)"
+                  "-i (Required) <Input path> - Specify the image to turn into a spreadsheet.\n"
                   "-o (Required) <Output name> - Specify the path of the output spreadsheet.\n"
                   "-x <First pixel X> - Specify the X coordinate of the first pixel to place on r/place\n"
                   "-y <First pixel Y> - Specify the Y coordinate of the first pixel to place on r/place\n"
@@ -216,10 +285,17 @@ def main(cmdline):
                   "already has 1x1 pixels, this removes the need for a header.\n")
             return
 
-    if set_values["input"] is None or set_values["output"] is None:
+    if set_values["input"] is None or set_values["output"] is None or set_values["mode"] is None:
         print("PixieSheet.py -h for instructions")
+        return
 
-    image_to_sheet(set_values)
+    if set_values["mode"] == "tosheet":
+        image_to_sheet(set_values)
+    elif set_values["mode"] == "fromsheet":
+        sheet_to_image(set_values)
+    else:
+        print("PixieSheet.py -h for instructions")
+        return
 
 
 if __name__ == '__main__':
