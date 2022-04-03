@@ -24,19 +24,22 @@ import sys
 import xlsxwriter
 import numpy
 import getopt
+import math
 from PIL import Image
 
 
+# Loads the passed image into a PIL image object
 def load_image(path: str) -> Image:
     return Image.open(path)
 
 
+# Obtains image starting coordinates and size of pixels
 def get_image_info(image: Image) -> dict:
     out_info = {"begin": [], "pixel-size": []}
     header_colors = [[255, 0, 0], [0, 255, 0], [0, 0, 255]]
 
     # Search image for header pixels (red green and blue)
-    header_found = False;
+    header_found = False
     header_check_index = 0
     previous_size = 0
     size_counter = 0
@@ -57,7 +60,7 @@ def get_image_info(image: Image) -> dict:
                         next_pixel = image.getpixel((inner_x + 1, y))
                     # Check if we are still counting the same pixel
                     if numpy.array_equal(current_pixel, header_colors[header_check_index]):
-                        size_counter = size_counter + 1
+                        size_counter += 1
                         # Check if we're entering a pixel that belongs to the header and is not the final one
                         if header_check_index + 1 < len(header_colors) and \
                                 numpy.array_equal(next_pixel, header_colors[header_check_index + 1]):
@@ -66,7 +69,7 @@ def get_image_info(image: Image) -> dict:
                             else:
                                 previous_size = size_counter
                                 size_counter = 0
-                                header_check_index = header_check_index + 1
+                                header_check_index += 1
                         # Check if we're entering a pixel that is not part of header colors anymore indicating finish
                         elif header_check_index + 1 == len(header_colors) and not \
                                 numpy.array_equal(next_pixel, header_colors[header_check_index]):
@@ -83,9 +86,47 @@ def get_image_info(image: Image) -> dict:
     return out_info
 
 
+# Trims passed image to make starting coordinates 0, 0
+def trim_image(image: Image, image_info: dict) -> Image:
+    left = image_info["begin"][0]
+    top = image_info["begin"][1]
+    right = image.width
+    bottom = image.height
+    return image.crop((left, top, right, bottom))
+
+
+# Calculate pixel hop count
+def calculate_pixel_hops(axis_size: int, pixel_size: int) -> int:
+    hops = math.floor(axis_size / pixel_size)
+    if axis_size % pixel_size > 0:
+        hops += 1
+
+    return int(hops)
+
+
+# Generate a pixel art matrix from the provided image where a pixel of x size is shrunk to a 1x1 pixel
+def generate_pixel_map(image: Image, pixel_size: int) -> numpy.ndarray:
+    out_array = []
+    width_hops = calculate_pixel_hops(image.width, pixel_size)
+    height_hops = calculate_pixel_hops(image.height, pixel_size)
+    for y in range(height_hops):
+        actual_y = y * pixel_size
+        y_row = []
+        for x in range(width_hops):
+            actual_x = x * pixel_size
+            y_row.append(image.getpixel((actual_x, actual_y)))
+        out_array.append(y_row)
+
+    return numpy.asarray(out_array, dtype="uint8")
+
+
 def image_to_sheet(image_path: str):
     input_image = load_image(image_path)
     image_info = get_image_info(input_image)
+    cropped_image = trim_image(input_image, image_info)
+    pixel_map = generate_pixel_map(cropped_image, image_info["pixel-size"])
+    pixel_image = Image.fromarray(pixel_map)
+    pixel_image.save("Untitled-3.png")
 
 
 def main(cmdline):
