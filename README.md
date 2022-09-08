@@ -1,8 +1,8 @@
 # PixieSheet
 
-[![Updated Badge](https://badges.pufler.dev/updated/Teitoku42/PixieSheet)](https://badges.pufler.dev)
-[![Created Badge](https://badges.pufler.dev/created/Teitoku42/PixieSheet)](https://badges.pufler.dev)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+![GitHub last commit](https://img.shields.io/github/last-commit/Teitoku42/PixieSheet)
+![GitHub top language](https://img.shields.io/github/languages/top/Teitoku42/PixieSheet)
+![GitHub](https://img.shields.io/github/license/Teitoku42/PixieSheet)
 
 This script was created to easily convert pixel arts to spreadsheets as to easily coordinate pixeling efforts for r/PlaceNL. Later functionality was also implemented that allows for the conversion from pixelart spreadsheets back to images so that these could easily be imported in the r/PlaceNL command & control center in order to be streamed to the botnet.
 
